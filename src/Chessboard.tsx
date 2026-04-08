@@ -142,6 +142,18 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       promotion?: PieceSymbol;
     } | null>(null);
 
+    // ── Redo stack for move history scrubbing ──────────────────────────
+    // chess.ts has undo() but no redo(), so the board maintains its own
+    // stack of popped moves. Held in a ref because pushing/popping it
+    // doesn't need to trigger a render — the visual update comes from
+    // syncFromChess() bumping syncVersion.
+    //
+    // Cleared whenever a fresh move enters history (gesture or
+    // animateMove). At that branching point any moves to the right of
+    // the cursor are no longer reachable, so dropping them is correct.
+    // v0.2 will turn this branching event into a tree node instead.
+    const redoStackRef = useRef<Move[]>([]);
+
     // ── Sounds ──────────────────────────────────────────────────────────
     const sounds = useBoardSounds(soundEnabled, hapticsEnabled);
 
@@ -266,6 +278,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             promotion: promotion as PieceSymbol,
           });
           if (move) {
+            // Branching point — see redoStackRef declaration. Any
+            // fresh move makes the queued redo entries unreachable.
+            redoStackRef.current = [];
             fenRef.current = chess.fen();
             syncFromChess();
             sounds.playForMove(move, chess);
@@ -371,6 +386,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
               promotion: promotion as PieceSymbol,
             });
             if (move) {
+              // Same branching point as executeMove — programmatic
+              // moves also invalidate any pending redo entries.
+              redoStackRef.current = [];
               fenRef.current = chess.fen();
               syncFromChess();
               onMove?.(move);
@@ -399,13 +417,90 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             chess.load(nextFen ?? STARTING_FEN);
           }
           // Reset cancels any queued premove — the board the user
-          // queued against doesn't exist anymore.
+          // queued against doesn't exist anymore. The redo stack also
+          // belongs to a position that no longer exists.
           setPremove(null);
+          redoStackRef.current = [];
           fenRef.current = chess.fen();
           syncFromChess();
         },
         getFen: () => chess.fen(),
         cancelPremove,
+        // ── Move history scrubbing (M5) ────────────────────────────
+        // undo() pops chess.ts's history into our redo stack; redo()
+        // does the reverse. Both call syncFromChess() so the
+        // reconciliation diff sees the new position and animates the
+        // pieces backward (the M5 backward-promotion branch in
+        // reconcile-pieces.ts is what makes promotion-undo not pop).
+        // Sounds and onMove intentionally do NOT fire — scrubbing is
+        // a navigation operation, not a new move.
+        undo: () => {
+          if (chess.history().length === 0) return;
+          const popped = chess.undo();
+          if (popped) {
+            redoStackRef.current.push(popped as Move);
+            setPremove(null);
+            fenRef.current = chess.fen();
+            syncFromChess();
+          }
+        },
+        redo: () => {
+          const popped = redoStackRef.current.pop();
+          if (!popped) return;
+          try {
+            // SAN is the most reliable form to replay because it
+            // re-resolves the from/to disambiguation against the
+            // current position. san is non-optional on Move.
+            chess.move(popped.san);
+            setPremove(null);
+            fenRef.current = chess.fen();
+            syncFromChess();
+          } catch (err) {
+            // If the redo somehow fails (shouldn't happen, but
+            // defensive), drop the entry rather than corrupting the
+            // stack. The visible state stays consistent.
+            if (__DEV__) {
+              console.warn("[expo-chessboard] redo failed:", err);
+            }
+          }
+        },
+        goToMoveIndex: (n: number) => {
+          const current = chess.history().length;
+          const total = current + redoStackRef.current.length;
+          const target = Math.max(0, Math.min(n, total));
+          if (target === current) return;
+          if (target < current) {
+            const steps = current - target;
+            for (let i = 0; i < steps; i++) {
+              const popped = chess.undo();
+              if (popped) redoStackRef.current.push(popped as Move);
+            }
+          } else {
+            const steps = target - current;
+            for (let i = 0; i < steps; i++) {
+              const popped = redoStackRef.current.pop();
+              if (!popped) break;
+              try {
+                chess.move(popped.san);
+              } catch (err) {
+                if (__DEV__) {
+                  console.warn(
+                    "[expo-chessboard] goToMoveIndex redo step failed:",
+                    err
+                  );
+                }
+                break;
+              }
+            }
+          }
+          setPremove(null);
+          fenRef.current = chess.fen();
+          syncFromChess();
+        },
+        getMoveIndex: () => chess.history().length,
+        getHistory: () => chess.history({ verbose: true }) as Move[],
+        canUndo: () => chess.history().length > 0,
+        canRedo: () => redoStackRef.current.length > 0,
       }),
       [
         chess,

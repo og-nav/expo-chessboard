@@ -158,6 +158,33 @@ export interface ChessboardRef {
   getFen: () => string;
   /** Clear any queued premove. No-op when `premovesEnabled` is false. */
   cancelPremove: () => void;
+  /**
+   * Step backward one move. Calls `chess.undo()` and pushes the popped
+   * move onto an internal redo stack so `redo()` can replay it. Pieces
+   * animate backward through the same reconciliation path that handles
+   * forward moves. No-op when there is no history.
+   */
+  undo: () => void;
+  /**
+   * Step forward one move from the redo stack. No-op when the stack is
+   * empty (i.e. the consumer is at the head of history). Making any new
+   * move via the gesture layer or `animateMove()` clears the redo stack.
+   */
+  redo: () => void;
+  /**
+   * Jump to an absolute move index — `0` is the starting position,
+   * `getMoveIndex()` is the head. Undoes or redoes enough times to land
+   * there. Pieces snap to the destination position rather than animating
+   * through intermediate squares (single-step `undo`/`redo` is the path
+   * for animated stepping). Out-of-range indices clamp.
+   */
+  goToMoveIndex: (n: number) => void;
+  /** Current ply count — equivalent to `chess.history().length`. */
+  getMoveIndex: () => number;
+  /** All moves played so far, in verbose form. */
+  getHistory: () => Move[];
+  canUndo: () => boolean;
+  canRedo: () => boolean;
 }
 
 export type { Move, PieceSymbol, Chess };

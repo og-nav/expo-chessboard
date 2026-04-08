@@ -54,6 +54,13 @@ const PROMOTION_KINDS = new Set(["q", "r", "b", "n"]);
  *     preferred over adjacent-file (capture-promotion). This is the
  *     fix for the bug #9 promotion-pop the chessboard-v2 audit flagged.
  *
+ *  3b. Backward promotion (M5) — the new entry is a pawn on rank 7/2,
+ *      and there's a same-color non-pawn on the back rank that just
+ *      vanished from a same/adjacent file. This is the symmetric case
+ *      that fires when the consumer calls `ref.undo()` to step back
+ *      across a promotion: the queen morphs back into a pawn instead
+ *      of popping out and a fresh pawn popping in.
+ *
  *  4. Fresh — nothing matched. Allocate a new key. This is what the
  *     initial render does for all 32 pieces.
  *
@@ -106,6 +113,20 @@ export function reconcilePieces(
       foundKey = findPromotionKey(state, oldMap, newMap, sq, piece, usedKeys);
     }
 
+    // 3b. Backward promotion (M5). A new pawn on rank 7/2 matches a
+    //     same-color non-pawn on the back rank that just emptied —
+    //     this is what fires when the user undoes across a promotion.
+    if (!foundKey) {
+      foundKey = findBackwardPromotionKey(
+        state,
+        oldMap,
+        newMap,
+        sq,
+        piece,
+        usedKeys
+      );
+    }
+
     // 4. Fresh key — initial render or genuine new piece.
     if (!foundKey) {
       foundKey = `p${state.nextKeyId++}`;
@@ -137,10 +158,11 @@ export function reconcilePieces(
  * vanishingly rare and the same-file pawn is the visually-correct one in
  * 99% of games.
  *
- * The reverse direction (queen → pawn on undo) also works through this
- * branch when `oldMap` contains the queen on rank 8 and `newMap` contains
- * a pawn on rank 7 — the symmetry falls out of the same comparison run
- * with the maps swapped, which the M5 undo path takes advantage of.
+ * The reverse direction (queen → pawn on undo) is handled by the
+ * separate `findBackwardPromotionKey` helper below — the symmetry
+ * doesn't fall out automatically because the main loop only iterates
+ * over `newMap`, so a back-rank piece that VANISHES never sees this
+ * function.
  */
 function findPromotionKey(
   state: ReconcileState,
@@ -178,6 +200,62 @@ function findPromotionKey(
       bestDistance = fileDist;
       bestKey = key;
       if (fileDist === 0) break; // can't beat the same-file match
+    }
+  }
+  return bestKey;
+}
+
+/**
+ * Backward-promotion helper — the symmetric counterpart to
+ * `findPromotionKey`. Fires when the new entry is a same-color pawn on
+ * rank 7 (white) or rank 2 (black) and there is an unused back-rank
+ * non-pawn of the same color whose old square is now empty in the new
+ * map. The match is constrained to the same or an adjacent file (to
+ * cover capture-promotions in reverse), with same-file preferred.
+ *
+ * Triggered by `ref.undo()` after a promotion: the queen on e8 morphs
+ * back into the pawn on e7 instead of popping. Without this branch the
+ * board flicker the user sees on undo would be exactly the bug #9
+ * pop-instead-of-animate behavior we fixed for forward promotions.
+ */
+function findBackwardPromotionKey(
+  state: ReconcileState,
+  oldMap: Record<string, PieceType>,
+  newMap: Record<string, PieceType>,
+  sq: string,
+  piece: PieceType,
+  usedKeys: Set<string>
+): string | null {
+  if (piece[1] !== "p") return null;
+
+  const color = piece[0] as Player;
+  const sqRank = sq[1];
+  const isPromotionSourceRank =
+    (color === "w" && sqRank === "7") || (color === "b" && sqRank === "2");
+  if (!isPromotionSourceRank) return null;
+
+  const backRank = color === "w" ? "8" : "1";
+  const sqFileCode = sq.charCodeAt(0);
+
+  let bestKey: string | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const [key, oldSq] of state.keySquareMap) {
+    if (usedKeys.has(key)) continue;
+    if (oldSq[1] !== backRank) continue;
+
+    const oldPiece = oldMap[oldSq];
+    if (!oldPiece) continue;
+    if (oldPiece[0] !== color) continue;
+    if (!PROMOTION_KINDS.has(oldPiece[1])) continue;
+    if (newMap[oldSq]) continue; // back-rank piece must have left
+
+    const fileDist = Math.abs(oldSq.charCodeAt(0) - sqFileCode);
+    if (fileDist > 1) continue;
+
+    if (fileDist < bestDistance) {
+      bestDistance = fileDist;
+      bestKey = key;
+      if (fileDist === 0) break;
     }
   }
   return bestKey;
