@@ -57,11 +57,8 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       chess: chessProp,
       fen,
       boardSize,
-      boardOrientation,
-      playerSide,
-      // Deprecated alias — if set, it overrides both boardOrientation
-      // and playerSide so the v2 prop surface keeps working.
-      playerColor,
+      boardOrientation = "white",
+      playerSide = "both",
       colors: colorOverrides,
       pieces,
       renderPiece,
@@ -79,23 +76,11 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
     },
     ref
   ) {
-    // ── Bug #10 fix: split playerColor into orientation + playerSide ────
-    // Resolution order:
-    //   1. If `playerColor` (deprecated) is set, mirror it to both.
-    //   2. Otherwise honor `boardOrientation` / `playerSide` directly.
-    //   3. Default: white-up, both sides movable (analysis mode).
-    const resolvedOrientation = playerColor
-      ? playerColor === "b"
-        ? "black"
-        : "white"
-      : boardOrientation ?? "white";
-    const resolvedPlayerSide = playerColor
-      ? playerColor === "b"
-        ? "black"
-        : "white"
-      : playerSide ?? "both";
-
-    const flipped = resolvedOrientation === "black";
+    // Visual orientation and interaction restriction are independent.
+    // boardOrientation controls which side is at the bottom of the
+    // screen; playerSide controls which color the user is allowed to
+    // move ("both" = analysis mode, either color movable).
+    const flipped = boardOrientation === "black";
 
     // ── Bug #5 fix: memoize the merged colors object so consumers
     // passing inline `colors={{...}}` don't trigger downstream re-renders
@@ -167,9 +152,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
     // swap-turn legal map and stores moves into `premove` instead of
     // executing them.
     const userColorCode: Player | null =
-      resolvedPlayerSide === "both"
+      playerSide === "both"
         ? null
-        : resolvedPlayerSide === "black"
+        : playerSide === "black"
           ? "b"
           : "w";
     const isPremoveMode =
@@ -227,7 +212,22 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
 
       // Bump version to force PieceLayer re-render
       setSyncVersion((v) => v + 1);
-    }, [chess, premovesEnabled, userColorCode]);
+    }, [
+      chess,
+      premovesEnabled,
+      userColorCode,
+      // SharedValues — stable refs from useSharedValue, included to
+      // satisfy exhaustive-deps. They never change identity so this is
+      // a no-op for re-creation purposes.
+      pieceMap,
+      legalMovesMap,
+      promotionsMap,
+      premoveLegalMovesMap,
+      premovePromotionsMap,
+      kingInCheck,
+      lastMoveFrom,
+      lastMoveTo,
+    ]);
 
     // ── Bug #1 fix: useEffect must declare its dependencies. The v2
     // version had no dep array, so it ran every render and only avoided
@@ -342,7 +342,6 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       // syncVersion is in the dep array because we want to re-check
       // every time the board state advances, not just when premove
       // changes.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [syncVersion, premove, userColorCode, chess, executeMove]);
 
     // Wrap the public onSquarePress so a tap that ends in the
@@ -419,17 +418,16 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       ]
     );
 
-    // ── Bug #10 fix continued: derive the side that the gesture layer
-    // should let the user grab. "both" → whichever side it currently is
-    // to move, so analysis mode can grab either color naturally. In
-    // premove mode the user is grabbing their OWN pieces during the
-    // opponent's turn, so we hand the gesture layer userColorCode
-    // instead of chess.turn().
+    // Derive the side that the gesture layer should let the user grab.
+    // "both" → whichever side it currently is to move, so analysis mode
+    // can grab either color naturally. In premove mode the user is
+    // grabbing their OWN pieces during the opponent's turn, so we hand
+    // the gesture layer userColorCode instead of chess.turn().
     const gesturePlayerColor: Player = isPremoveMode
       ? (userColorCode as Player)
-      : resolvedPlayerSide === "both"
+      : playerSide === "both"
         ? chess.turn()
-        : resolvedPlayerSide === "black"
+        : playerSide === "black"
           ? "b"
           : "w";
 

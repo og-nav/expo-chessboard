@@ -103,12 +103,6 @@ export interface ChessboardProps {
   boardOrientation?: BoardOrientation;
   /** Which side can move. Default: "both" (analysis mode). */
   playerSide?: PlayerSide;
-  /**
-   * @deprecated Use `boardOrientation` and `playerSide` instead.
-   * Setting `playerColor` is equivalent to setting both
-   * `boardOrientation` and `playerSide` to the matching color.
-   */
-  playerColor?: Player;
   colors?: Partial<BoardColors>;
   /**
    * Per-piece overrides for the default piece images. Any pieces not

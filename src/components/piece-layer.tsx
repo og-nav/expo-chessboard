@@ -84,7 +84,7 @@ const AnimatedPiece = React.memo(function AnimatedPiece({
       y.value = newTarget.y;
     }
     prevSquare.current = square;
-  }, [square, pieceSize, flipped]);
+  }, [square, pieceSize, flipped, animDuration, x, y]);
 
   // Grow when this piece is the scaled piece, shrink when it's not
   useAnimatedReaction(
