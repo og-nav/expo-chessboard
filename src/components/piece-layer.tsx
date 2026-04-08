@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import { Image } from "react-native";
+import { Image, type ImageSourcePropType } from "react-native";
 import Animated, {
   useAnimatedReaction,
   useAnimatedStyle,
@@ -9,13 +9,12 @@ import Animated, {
 import type { SharedValue } from "react-native-reanimated";
 import { DEFAULT_PIECES } from "../constants";
 import { squareToXY } from "../helpers/square-utils";
+import {
+  createReconcileState,
+  reconcilePieces,
+  type ReconcileState,
+} from "../helpers/reconcile-pieces";
 import type { PieceType } from "../types";
-
-interface PieceEntry {
-  key: string;
-  piece: PieceType;
-  square: string;
-}
 
 interface Props {
   boardSize: number;
@@ -27,6 +26,11 @@ interface Props {
   draggingSquare: SharedValue<string | null>;
   dragX: SharedValue<number>;
   dragY: SharedValue<number>;
+  pieces?: Partial<Record<PieceType, ImageSourcePropType>>;
+  renderPiece?: (
+    piece: PieceType,
+    size: number
+  ) => React.ReactElement | null;
 }
 
 /**
@@ -44,6 +48,8 @@ const AnimatedPiece = React.memo(function AnimatedPiece({
   draggingSquare,
   dragX,
   dragY,
+  pieces,
+  renderPiece,
 }: {
   piece: PieceType;
   square: string;
@@ -54,6 +60,11 @@ const AnimatedPiece = React.memo(function AnimatedPiece({
   draggingSquare: SharedValue<string | null>;
   dragX: SharedValue<number>;
   dragY: SharedValue<number>;
+  pieces?: Partial<Record<PieceType, ImageSourcePropType>>;
+  renderPiece?: (
+    piece: PieceType,
+    size: number
+  ) => React.ReactElement | null;
 }) {
   const target = squareToXY(square, pieceSize, flipped);
   const x = useSharedValue(target.x);
@@ -105,23 +116,30 @@ const AnimatedPiece = React.memo(function AnimatedPiece({
     };
   });
 
-  return (
-    <Animated.View style={style} pointerEvents="none">
+  // renderPiece wins outright; otherwise consult `pieces` overrides,
+  // falling back to the bundled DEFAULT_PIECES PNGs.
+  const child = renderPiece
+    ? renderPiece(piece, pieceSize)
+    : (
       <Image
-        source={DEFAULT_PIECES[piece]}
+        source={pieces?.[piece] ?? DEFAULT_PIECES[piece]}
         style={{ width: pieceSize, height: pieceSize }}
       />
+    );
+
+  return (
+    <Animated.View style={style} pointerEvents="none">
+      {child}
     </Animated.View>
   );
 });
 
 /**
- * Renders all pieces. Reconciles old vs new piece positions to
- * determine which piece moved and assigns stable keys.
- *
- * NOTE: M2 keeps the reconciliation loop inlined. M3 extracts it into
- * `helpers/reconcile-pieces.ts` so it can be unit-tested without React,
- * and adds the promotion-key-reuse branch (bug #9 fix).
+ * Renders all pieces. The reconciliation pass — figuring out which
+ * React key each new entry should keep so its `<AnimatedPiece>` instance
+ * survives across the move and slides — lives in
+ * `helpers/reconcile-pieces.ts` so it can be unit tested. See that file
+ * for the algorithm and the bug #9 promotion fix.
  */
 export default function PieceLayer({
   boardSize,
@@ -133,58 +151,16 @@ export default function PieceLayer({
   draggingSquare,
   dragX,
   dragY,
+  pieces,
+  renderPiece,
 }: Props) {
   const pieceSize = boardSize / 8;
   const prevMapRef = useRef<Record<string, PieceType>>({});
-  const nextKeyId = useRef(0);
-  // Map from key to its current square — survives re-renders
-  const keySquareMap = useRef<Map<string, string>>(new Map());
+  const reconcileStateRef = useRef<ReconcileState>(createReconcileState());
 
-  // Compute entries directly during render (no useEffect/setState delay)
   const newMap = pieceMap.value;
   const oldMap = prevMapRef.current;
-
-  const entries: PieceEntry[] = [];
-  const usedKeys = new Set<string>();
-
-  for (const [sq, piece] of Object.entries(newMap)) {
-    // 1. Same piece on same square? Reuse key.
-    let foundKey: string | null = null;
-    for (const [key, oldSq] of keySquareMap.current) {
-      if (oldSq === sq && oldMap[sq] === piece && !usedKeys.has(key)) {
-        foundKey = key;
-        break;
-      }
-    }
-    // 2. Piece moved from another square? Find unmatched old piece of same type.
-    if (!foundKey) {
-      for (const [key, oldSq] of keySquareMap.current) {
-        if (
-          oldMap[oldSq] === piece &&
-          !newMap[oldSq] &&
-          !usedKeys.has(key)
-        ) {
-          foundKey = key;
-          break;
-        }
-      }
-    }
-    // 3. New piece (promotion, initial render)? Create new key.
-    if (!foundKey) {
-      foundKey = `p${nextKeyId.current++}`;
-    }
-
-    usedKeys.add(foundKey);
-    keySquareMap.current.set(foundKey, sq);
-    entries.push({ key: foundKey, piece, square: sq });
-  }
-
-  // Remove keys for captured/removed pieces
-  for (const key of [...keySquareMap.current.keys()]) {
-    if (!usedKeys.has(key)) {
-      keySquareMap.current.delete(key);
-    }
-  }
+  const entries = reconcilePieces(reconcileStateRef.current, oldMap, newMap);
 
   prevMapRef.current = { ...newMap };
 
@@ -205,6 +181,8 @@ export default function PieceLayer({
           draggingSquare={draggingSquare}
           dragX={dragX}
           dragY={dragY}
+          pieces={pieces}
+          renderPiece={renderPiece}
         />
       ))}
     </>

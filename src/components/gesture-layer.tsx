@@ -8,7 +8,7 @@ import {
   squareToXY,
   xyToSquare,
 } from "../helpers/square-utils";
-import type { PieceType, Player } from "../types";
+import type { PieceType, Player, Square } from "../types";
 
 interface Props {
   boardSize: number;
@@ -25,6 +25,7 @@ interface Props {
   dragY: SharedValue<number>;
   onMoveRequest: (from: string, to: string) => void;
   onPromotionRequest: (from: string, to: string) => void;
+  onSquarePress?: (square: Square) => void;
 }
 
 export default function GestureLayer({
@@ -42,6 +43,7 @@ export default function GestureLayer({
   dragY,
   onMoveRequest,
   onPromotionRequest,
+  onSquarePress,
 }: Props) {
   const pieceSize = boardSize / 8;
 
@@ -58,6 +60,13 @@ export default function GestureLayer({
       }
     },
     [onMoveRequest, onPromotionRequest, promotionsMap]
+  );
+
+  const fireSquarePress = useCallback(
+    (sq: string) => {
+      onSquarePress?.(sq as Square);
+    },
+    [onSquarePress]
   );
 
   const gesture = Gesture.Pan()
@@ -94,9 +103,16 @@ export default function GestureLayer({
         return;
       }
 
-      // Tap on empty / opponent piece → deselect
+      // Tap on empty / opponent piece → deselect.
+      // Also report the square via onSquarePress, which fires only for
+      // taps that don't trigger a move or selection (puzzle editors,
+      // click-to-arrow, annotation overlays). Selecting a piece is
+      // intentionally NOT a square press.
       selectedSquare.value = null;
       scaledSquare.value = null;
+      if (onSquarePress) {
+        runOnJS(fireSquarePress)(sq);
+      }
     })
     .onUpdate((e) => {
       "worklet";

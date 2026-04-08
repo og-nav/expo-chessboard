@@ -1,11 +1,13 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, type TextStyle } from "react-native";
 import type { BoardColors } from "../types";
 
 interface Props {
   boardSize: number;
   colors: BoardColors;
   flipped: boolean;
+  showCoordinates?: boolean;
+  coordinateStyle?: TextStyle;
 }
 
 const FILES = "abcdefgh";
@@ -15,6 +17,8 @@ const BoardBackground = React.memo(function BoardBackground({
   boardSize,
   colors,
   flipped,
+  showCoordinates = true,
+  coordinateStyle,
 }: Props) {
   const pieceSize = boardSize / 8;
   // Bug #11 fix: scale coordinate font with the board so they remain
@@ -30,8 +34,9 @@ const BoardBackground = React.memo(function BoardBackground({
       const displayRow = flipped ? 7 - row : row;
       const file = FILES[displayCol];
       const rank = RANKS[7 - displayRow];
-      const showFile = row === 7;
-      const showRank = col === 0;
+      const showFile = showCoordinates && row === 7;
+      const showRank = showCoordinates && col === 0;
+      const labelColor = isLight ? colors.coordinateLight : colors.coordinateDark;
 
       squares.push(
         <View
@@ -50,10 +55,8 @@ const BoardBackground = React.memo(function BoardBackground({
               style={[
                 s.coord,
                 s.rank,
-                {
-                  fontSize: coordFontSize,
-                  color: isLight ? colors.dark : colors.light,
-                },
+                { fontSize: coordFontSize, color: labelColor },
+                coordinateStyle,
               ]}
             >
               {rank}
@@ -64,10 +67,8 @@ const BoardBackground = React.memo(function BoardBackground({
               style={[
                 s.coord,
                 s.file,
-                {
-                  fontSize: coordFontSize,
-                  color: isLight ? colors.dark : colors.light,
-                },
+                { fontSize: coordFontSize, color: labelColor },
+                coordinateStyle,
               ]}
             >
               {file}

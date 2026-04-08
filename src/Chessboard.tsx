@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { View } from "react-native";
 import { useSharedValue } from "react-native-reanimated";
-import type { Move, PieceSymbol } from "chess.ts";
+import { Chess, type Move, type PieceSymbol } from "chess.ts";
 import {
   DEFAULT_COLORS,
   type BoardColors,
@@ -17,6 +17,7 @@ import {
   type PieceType,
   type Player,
 } from "./types";
+import { STARTING_FEN } from "./constants";
 import {
   buildPieceMap,
   computeLegalMap,
@@ -30,11 +31,14 @@ import PieceLayer from "./components/piece-layer";
 import LegalMoveDots from "./components/legal-move-dots";
 import GestureLayer from "./components/gesture-layer";
 import PromotionDialog from "./components/promotion-dialog";
+import ArrowsLayer from "./components/arrows-layer";
+import ExternalHighlights from "./components/external-highlights";
 
 const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
   function Chessboard(
     {
-      chess,
+      chess: chessProp,
+      fen,
       boardSize,
       boardOrientation,
       playerSide,
@@ -42,11 +46,18 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       // and playerSide so the v2 prop surface keeps working.
       playerColor,
       colors: colorOverrides,
+      pieces,
+      renderPiece,
+      showCoordinates = true,
+      coordinateStyle,
+      highlightedSquares,
+      arrows,
       gestureEnabled = true,
       animationDuration = 150,
       soundEnabled = true,
       hapticsEnabled = true,
       onMove,
+      onSquarePress,
     },
     ref
   ) {
@@ -75,6 +86,17 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       () => ({ ...DEFAULT_COLORS, ...colorOverrides }),
       [colorOverrides]
     );
+
+    // ── Controlled vs uncontrolled mode ────────────────────────────────
+    // If a `chess` prop is provided, the consumer owns the instance.
+    // Otherwise we lazily allocate one and treat the `fen` prop as the
+    // declarative source of truth — calling `load(fen)` on it whenever
+    // the consumer hands us a different FEN.
+    const internalChessRef = useRef<Chess | null>(null);
+    if (!chessProp && !internalChessRef.current) {
+      internalChessRef.current = new Chess(fen ?? STARTING_FEN);
+    }
+    const chess = chessProp ?? internalChessRef.current!;
 
     // ── Shared values (readable on UI thread) ───────────────────────────
     const pieceMap = useSharedValue<Record<string, PieceType>>({});
@@ -145,6 +167,18 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
         syncFromChess();
       }
     }, [chess, syncFromChess]);
+
+    // ── Uncontrolled mode: react to `fen` prop changes by loading the
+    // new position into the internal Chess instance. Skipped in
+    // controlled mode (consumer is responsible for their own resets).
+    useEffect(() => {
+      if (chessProp) return;
+      if (!fen) return;
+      if (chess.fen() === fen) return;
+      chess.load(fen);
+      fenRef.current = chess.fen();
+      syncFromChess();
+    }, [chessProp, fen, chess, syncFromChess]);
 
     // ── Move handling ───────────────────────────────────────────────────
     const executeMove = useCallback(
@@ -230,8 +264,20 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           fenRef.current = chess.fen();
           syncFromChess();
         },
+        reset: (nextFen?: string) => {
+          // In controlled mode the caller is expected to mutate their
+          // own Chess instance; we just re-sync so the board reflects
+          // whatever they did. In uncontrolled mode we own the instance,
+          // so we can call load() ourselves.
+          if (!chessProp) {
+            chess.load(nextFen ?? STARTING_FEN);
+          }
+          fenRef.current = chess.fen();
+          syncFromChess();
+        },
+        getFen: () => chess.fen(),
       }),
-      [chess, syncFromChess, sounds, onMove, animationDuration]
+      [chess, chessProp, syncFromChess, sounds, onMove, animationDuration]
     );
 
     // ── Bug #10 fix continued: derive the side that the gesture layer
@@ -251,6 +297,8 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           boardSize={boardSize}
           colors={colors}
           flipped={flipped}
+          showCoordinates={showCoordinates}
+          coordinateStyle={coordinateStyle}
         />
         <HighlightLayer
           boardSize={boardSize}
@@ -261,6 +309,14 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           lastMoveTo={lastMoveTo}
           kingInCheck={kingInCheck}
         />
+        {highlightedSquares && highlightedSquares.length > 0 && (
+          <ExternalHighlights
+            boardSize={boardSize}
+            flipped={flipped}
+            highlights={highlightedSquares}
+            colors={colors}
+          />
+        )}
         <PieceLayer
           boardSize={boardSize}
           flipped={flipped}
@@ -271,7 +327,17 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           draggingSquare={draggingSquare}
           dragX={dragX}
           dragY={dragY}
+          pieces={pieces}
+          renderPiece={renderPiece}
         />
+        {arrows && arrows.length > 0 && (
+          <ArrowsLayer
+            boardSize={boardSize}
+            flipped={flipped}
+            arrows={arrows}
+            colors={colors}
+          />
+        )}
         <LegalMoveDots
           boardSize={boardSize}
           flipped={flipped}
@@ -295,6 +361,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           dragY={dragY}
           onMoveRequest={handleMoveRequest}
           onPromotionRequest={handlePromotionRequest}
+          onSquarePress={onSquarePress}
         />
         {promotionPending && (
           <PromotionDialog

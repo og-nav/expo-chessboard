@@ -5,8 +5,15 @@ export default Chessboard;
 
 export { DEFAULT_COLORS } from "./types";
 export { DEFAULT_PIECES, STARTING_FEN, SOUND_ASSETS } from "./constants";
+export {
+  THEME_DEFAULT,
+  THEME_WOOD,
+  THEME_BLUE,
+  THEME_GREEN,
+} from "./themes";
 
 export type {
+  Arrow,
   BoardColors,
   BoardOrientation,
   ChessboardProps,
@@ -15,6 +22,7 @@ export type {
   Player,
   PlayerSide,
   Square,
+  SquareHighlight,
   Move,
   PieceSymbol,
   Chess,
