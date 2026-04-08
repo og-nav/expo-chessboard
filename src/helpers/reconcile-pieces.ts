@@ -247,7 +247,12 @@ function findBackwardPromotionKey(
     if (!oldPiece) continue;
     if (oldPiece[0] !== color) continue;
     if (!PROMOTION_KINDS.has(oldPiece[1])) continue;
-    if (newMap[oldSq]) continue; // back-rank piece must have left
+    // The promoted piece must be gone from this square. Note that
+    // newMap[oldSq] CAN be defined — undoing a capture-promotion
+    // restores the captured piece on the back rank, so the square
+    // is occupied by something different. The right check is "the
+    // SAME piece is no longer here", not "the square is empty".
+    if (newMap[oldSq] === oldPiece) continue;
 
     const fileDist = Math.abs(oldSq.charCodeAt(0) - sqFileCode);
     if (fileDist > 1) continue;
