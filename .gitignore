@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+*.tgz
+coverage/
+
+# Local-only: source-of-truth reference (chessboard-v2) and the design plan.
+# Used during development to copy from; not part of the published package or git history.
+reference/
+
+# Example app
+example/node_modules/
+example/.expo/
+example/dist/
+example/web-build/
+example/ios/Pods/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
