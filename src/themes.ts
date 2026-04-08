@@ -26,6 +26,7 @@ export const THEME_WOOD: BoardColors = {
   externalHighlight: "rgba(255, 170, 0, 0.6)",
   coordinateLight: "#b58863",
   coordinateDark: "#f0d9b5",
+  premove: "rgba(231, 76, 60, 0.7)",
 };
 
 /** chess.com-style blue. */
@@ -41,6 +42,7 @@ export const THEME_BLUE: BoardColors = {
   externalHighlight: "rgba(255, 170, 0, 0.6)",
   coordinateLight: "#8ca2ad",
   coordinateDark: "#dee3e6",
+  premove: "rgba(231, 76, 60, 0.7)",
 };
 
 /** lichess-style green — same family as THEME_DEFAULT but tuned warmer. */
@@ -56,4 +58,5 @@ export const THEME_GREEN: BoardColors = {
   externalHighlight: "rgba(255, 170, 0, 0.6)",
   coordinateLight: "#769656",
   coordinateDark: "#eeeed2",
+  premove: "rgba(231, 76, 60, 0.7)",
 };

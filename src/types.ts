@@ -39,6 +39,8 @@ export interface BoardColors {
   coordinateLight: string;
   /** Coordinate label color on dark squares (uses light color by default). */
   coordinateDark: string;
+  /** Tint used for the queued-premove ring + arrow. */
+  premove: string;
 }
 
 export const DEFAULT_COLORS: BoardColors = {
@@ -53,6 +55,7 @@ export const DEFAULT_COLORS: BoardColors = {
   externalHighlight: "rgba(255, 170, 0, 0.6)",
   coordinateLight: "#779952",
   coordinateDark: "#edeed1",
+  premove: "rgba(231, 76, 60, 0.7)",
 };
 
 /**
@@ -129,6 +132,14 @@ export interface ChessboardProps {
   animationDuration?: number;
   soundEnabled?: boolean;
   hapticsEnabled?: boolean;
+  /**
+   * Allow the user to queue a move during the opponent's turn. The
+   * queued move auto-applies as soon as it becomes legal; if the
+   * opponent's actual move makes it illegal, the premove is cleared
+   * silently. Premoves require `playerSide` to be "white" or "black"
+   * — they're a no-op in analysis mode (`playerSide: "both"`).
+   */
+  premovesEnabled?: boolean;
   onMove?: (move: Move) => void;
   /**
    * Fires on any tap that does not result in a move or piece selection.
@@ -151,6 +162,8 @@ export interface ChessboardRef {
   reset: (fen?: string) => void;
   /** Returns the current FEN of whichever Chess instance the board uses. */
   getFen: () => string;
+  /** Clear any queued premove. No-op when `premovesEnabled` is false. */
+  cancelPremove: () => void;
 }
 
 export type { Move, PieceSymbol, Chess };
