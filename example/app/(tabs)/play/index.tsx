@@ -33,7 +33,7 @@ export default function PlayScreen() {
 
 function PlaySession({ onNewGame }: { onNewGame: () => void }) {
   const { width } = useWindowDimensions();
-  const boardSize = Math.min(width - 32, 420);
+  const boardSize = Math.min(width - 32, 480);
 
   const textColor = useThemeColor({}, "text");
   const subText = useThemeColor({}, "icon");

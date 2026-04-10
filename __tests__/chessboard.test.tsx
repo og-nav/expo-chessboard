@@ -173,6 +173,131 @@ describe("Chessboard history scrubbing (M5)", () => {
   });
 });
 
+describe("Chessboard ref API — animateMove edge cases", () => {
+  test("animateMove with promotion parameter promotes the pawn", () => {
+    const ref = createRef<ChessboardRef>();
+    const onMove = jest.fn();
+    const chess = new Chess("k7/4P3/8/8/8/8/8/7K w - - 0 1");
+    render(
+      <Chessboard
+        ref={ref}
+        boardSize={320}
+        onMove={onMove}
+        chess={chess}
+      />
+    );
+
+    act(() => {
+      ref.current?.animateMove("e7", "e8", "q");
+    });
+
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onMove.mock.calls[0][0].promotion).toBe("q");
+    // FEN should have a white queen on e8, not a pawn
+    expect(ref.current?.getFen()).toContain("Q");
+  });
+
+  test("animateMove with an illegal move does not crash or fire onMove", () => {
+    const ref = createRef<ChessboardRef>();
+    const onMove = jest.fn();
+    render(<Chessboard ref={ref} boardSize={320} onMove={onMove} />);
+
+    const fenBefore = ref.current?.getFen();
+
+    // a1 has a rook but a2 is blocked by a pawn — illegal
+    expect(() => {
+      act(() => {
+        ref.current?.animateMove("a1", "a2");
+      });
+    }).not.toThrow();
+
+    expect(onMove).not.toHaveBeenCalled();
+    expect(ref.current?.getFen()).toBe(fenBefore);
+  });
+});
+
+describe("Chessboard ref API — goToMoveIndex clamping", () => {
+  test("negative index clamps to 0", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.animateMove("e2", "e4");
+      ref.current?.animateMove("e7", "e5");
+    });
+
+    act(() => {
+      ref.current?.goToMoveIndex(-5);
+    });
+
+    expect(ref.current?.getMoveIndex()).toBe(0);
+  });
+
+  test("index beyond total clamps to the end", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.animateMove("e2", "e4");
+      ref.current?.animateMove("e7", "e5");
+    });
+
+    act(() => {
+      ref.current?.goToMoveIndex(100);
+    });
+
+    expect(ref.current?.getMoveIndex()).toBe(2);
+  });
+});
+
+describe("Chessboard ref API — getMoveCount vs getMoveIndex", () => {
+  test("getMoveCount stays at full length after undo while getMoveIndex decreases", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.animateMove("e2", "e4");
+      ref.current?.animateMove("e7", "e5");
+      ref.current?.animateMove("g1", "f3");
+    });
+
+    expect(ref.current?.getMoveCount()).toBe(3);
+    expect(ref.current?.getMoveIndex()).toBe(3);
+
+    act(() => {
+      ref.current?.undo();
+      ref.current?.undo();
+    });
+
+    // Cursor moved back but total reachable moves unchanged
+    expect(ref.current?.getMoveIndex()).toBe(1);
+    expect(ref.current?.getMoveCount()).toBe(3);
+  });
+});
+
+describe("Chessboard ref API — reset clears redo stack", () => {
+  test("reset() after undo makes canRedo false", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.animateMove("e2", "e4");
+      ref.current?.animateMove("e7", "e5");
+    });
+
+    act(() => {
+      ref.current?.undo();
+    });
+    expect(ref.current?.canRedo()).toBe(true);
+
+    act(() => {
+      ref.current?.reset();
+    });
+    expect(ref.current?.canRedo()).toBe(false);
+    expect(ref.current?.getMoveCount()).toBe(0);
+  });
+});
+
 describe("Chessboard sound mock", () => {
   // Fake timers are scoped to this describe — animateMove defers the
   // sound trigger via setTimeout(animationDuration), so we need to

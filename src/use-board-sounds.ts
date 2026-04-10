@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import {
+  createAudioPlayer,
   setAudioModeAsync,
-  useAudioPlayer,
   type AudioPlayer,
 } from "expo-audio";
 import * as Haptics from "expo-haptics";
@@ -9,40 +9,50 @@ import { SOUND_ASSETS, type SoundKey } from "./constants";
 import type { Chess, Move } from "./types";
 
 /**
- * Loads the three board sounds via expo-audio and returns a stable
- * `playForMove` callback. Replaces the old expo-av implementation.
+ * Module-level singleton audio players. Created lazily on first call
+ * to `useBoardSounds` and reused across every Chessboard instance for
+ * the lifetime of the app.
  *
- * Notes vs. the v2 version:
- *  - Uses `useAudioPlayer` (one player per sound), so playback is
- *    instantaneous and re-entrant — no async load on each press.
- *  - `playsInSilentMode` (expo-audio) replaces `playsInSilentModeIOS`
- *    (expo-av) — fixes bug #7.
- *  - Game-end states (checkmate / draw / threefold) all play a single
- *    `gameOver` sound — fixes bug #8 where draws used the checkmate sound
- *    keyed under the wrong name.
- *  - Return value is `useMemo`-stable so consumers don't re-render on
- *    every tick — fixes bug #6.
- *  - There is intentionally no `check` sound; `inCheck()` falls through
- *    to the regular move sound.
+ * Why singletons instead of per-component `useAudioPlayer`:
+ *   `useAudioPlayer` ties native player lifetime to the React component.
+ *   In a FlatList/virtualised list, boards mount and unmount constantly
+ *   as the user scrolls. Each mount creates 3 native AVAudioPlayers;
+ *   each unmount tears them down. iOS has a soft limit on concurrent
+ *   audio sessions — once the churn exceeds what the system can recycle
+ *   in time, new players silently fail to play and sound goes dead for
+ *   the rest of the session.
+ *
+ *   `createAudioPlayer` is the imperative counterpart: the player lives
+ *   until you call `.remove()`. Three singletons for the entire app
+ *   eliminates the churn entirely.
+ */
+let singletonPlayers: Record<SoundKey, AudioPlayer> | null = null;
+let audioModeConfigured = false;
+
+function getPlayers(): Record<SoundKey, AudioPlayer> {
+  if (!singletonPlayers) {
+    singletonPlayers = {
+      move: createAudioPlayer(SOUND_ASSETS.move),
+      capture: createAudioPlayer(SOUND_ASSETS.capture),
+      gameOver: createAudioPlayer(SOUND_ASSETS.gameOver),
+    };
+  }
+  return singletonPlayers;
+}
+
+/**
+ * Returns stable `playForMove` and `playForScrub` callbacks backed by
+ * shared singleton audio players. Safe to call from any number of
+ * concurrent Chessboard instances.
  */
 export function useBoardSounds(
   soundEnabled: boolean,
   hapticsEnabled: boolean
 ) {
-  const movePlayer = useAudioPlayer(SOUND_ASSETS.move);
-  const capturePlayer = useAudioPlayer(SOUND_ASSETS.capture);
-  const gameOverPlayer = useAudioPlayer(SOUND_ASSETS.gameOver);
-
-  const players = useMemo<Record<SoundKey, AudioPlayer>>(
-    () => ({
-      move: movePlayer,
-      capture: capturePlayer,
-      gameOver: gameOverPlayer,
-    }),
-    [movePlayer, capturePlayer, gameOverPlayer]
-  );
-
+  // Ensure audio mode is configured exactly once per app session.
   useEffect(() => {
+    if (audioModeConfigured) return;
+    audioModeConfigured = true;
     setAudioModeAsync({
       playsInSilentMode: true,
       interruptionMode: "mixWithOthers",
@@ -56,9 +66,15 @@ export function useBoardSounds(
   const playSound = useCallback(
     (type: SoundKey) => {
       if (!soundEnabled) return;
+      const players = getPlayers();
       const player = players[type];
       if (!player) return;
       try {
+        // Pause before seek+play so rapid-fire calls (fast undo/redo
+        // scrubbing) always restart the sound. Without pause(), the
+        // player is already in "playing" state and a second play() is
+        // a no-op — the sound silently swallows the trigger.
+        player.pause();
         player.seekTo(0);
         player.play();
       } catch (err) {
@@ -67,7 +83,7 @@ export function useBoardSounds(
         }
       }
     },
-    [soundEnabled, players]
+    [soundEnabled]
   );
 
   const playHaptic = useCallback(() => {
@@ -98,5 +114,28 @@ export function useBoardSounds(
     [playSound, playHaptic]
   );
 
-  return useMemo(() => ({ playForMove }), [playForMove]);
+  // Sound for undo/redo scrubbing. Uses the move's own metadata
+  // (.captured) instead of the post-move chess state, because:
+  //   - undo() runs AFTER chess.undo(), so chess is in the PRE-move
+  //     state and inCheckmate() etc would be wrong
+  //   - we never want gameOver when scrubbing — even redoing the
+  //     mating move is a navigation action, not a fresh checkmate
+  // Capture-vs-move is preserved so reverting/replaying a capture
+  // still sounds like a capture.
+  const playForScrub = useCallback(
+    (move: Move) => {
+      if (move.captured) {
+        playSound("capture");
+      } else {
+        playSound("move");
+      }
+      playHaptic();
+    },
+    [playSound, playHaptic]
+  );
+
+  return useMemo(
+    () => ({ playForMove, playForScrub }),
+    [playForMove, playForScrub]
+  );
 }

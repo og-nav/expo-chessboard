@@ -1,11 +1,10 @@
 import { Stack } from "expo-router";
 
 /**
- * Per-tab Stack. The iOS chrome (`headerLargeTitle`,
- * `headerTransparent`, `headerBlurEffect`) is what gives us the
- * native large-title-collapses-into-nav-bar behavior backed by
- * react-native-screens. None of it has Android equivalents — on
- * Android we just get a plain header bar.
+ * Per-tab Stack. `headerLargeTitle` gives us the native large-title-
+ * collapses-into-nav-bar behavior. Header is intentionally opaque —
+ * a transparent blur header adapts its appearance based on content
+ * behind it, and chess boards' dark/light squares make it flicker.
  */
 export default function PlayLayout() {
   return (
@@ -15,11 +14,8 @@ export default function PlayLayout() {
           ? {}
           : {
               headerLargeTitle: true,
-              headerTransparent: true,
-              headerBlurEffect: "systemChromeMaterial",
               headerLargeTitleShadowVisible: false,
               headerShadowVisible: true,
-              headerLargeStyle: { backgroundColor: "transparent" },
             }),
       }}
     >

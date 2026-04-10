@@ -8,11 +8,8 @@ export default function SmokeLayout() {
           ? {}
           : {
               headerLargeTitle: true,
-              headerTransparent: true,
-              headerBlurEffect: "systemChromeMaterial",
               headerLargeTitleShadowVisible: false,
               headerShadowVisible: true,
-              headerLargeStyle: { backgroundColor: "transparent" },
             }),
       }}
     >

@@ -181,6 +181,13 @@ export interface ChessboardRef {
   goToMoveIndex: (n: number) => void;
   /** Current ply count — equivalent to `chess.history().length`. */
   getMoveIndex: () => number;
+  /**
+   * Total reachable moves: current ply count plus the redo stack size.
+   * After undoing back to ply 0, `getMoveIndex()` returns 0 but
+   * `getMoveCount()` still returns the full game length, so callers
+   * can `goToMoveIndex(getMoveCount())` to jump back to the head.
+   */
+  getMoveCount: () => number;
   /** All moves played so far, in verbose form. */
   getHistory: () => Move[];
   canUndo: () => boolean;

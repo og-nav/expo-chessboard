@@ -20,7 +20,12 @@ interface Props {
   boardSize: number;
   flipped: boolean;
   animationDuration: number;
-  pieceMap: SharedValue<Record<string, PieceType>>;
+  // Plain React state, NOT a SharedValue. Reanimated v4 makes
+  // `.value` reads during JS render unsafe (stale snapshots), so the
+  // Chessboard parent mirrors its pieceMap shared value into a React
+  // state and passes the state here. The shared value still exists
+  // for the gesture-layer (worklets, UI thread).
+  pieceMap: Record<string, PieceType>;
   syncVersion: number;
   scaledSquare: SharedValue<string | null>;
   draggingSquare: SharedValue<string | null>;
@@ -100,6 +105,29 @@ const AnimatedPiece = React.memo(function AnimatedPiece({
     }
   );
 
+  // Hand-off from drag → static position. The moment draggingSquare
+  // transitions from "this piece" to anything else (drop or cancel),
+  // copy the current drag coordinates into x/y so the next paint
+  // doesn't snap the piece back to its old square. Without this,
+  // dropping a piece looks like: finger lift → snap to origin → slide
+  // to destination, because useAnimatedStyle starts reading x/y the
+  // instant draggingSquare goes null and x/y are still pointing at
+  // the origin square (the JS thread hasn't rendered the new
+  // pieceMap yet). With this, x/y are at the drop position when the
+  // hand-off happens, and the upcoming square-prop change from
+  // reconciliation animates a tiny slide from drop position into the
+  // destination square center — which reads as "the piece dropped
+  // exactly where I let go."
+  useAnimatedReaction(
+    () => draggingSquare.value,
+    (current, previous) => {
+      if (previous === square && current !== square) {
+        x.value = dragX.value;
+        y.value = dragY.value;
+      }
+    }
+  );
+
   const style = useAnimatedStyle(() => {
     const isDragging = draggingSquare.value === square;
     const isScaled = scaledSquare.value === square;
@@ -158,7 +186,7 @@ export default function PieceLayer({
   const prevMapRef = useRef<Record<string, PieceType>>({});
   const reconcileStateRef = useRef<ReconcileState>(createReconcileState());
 
-  const newMap = pieceMap.value;
+  const newMap = pieceMap;
   const oldMap = prevMapRef.current;
   const entries = reconcilePieces(reconcileStateRef.current, oldMap, newMap);
 

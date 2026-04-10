@@ -33,10 +33,16 @@
     "reanimated"
   ],
   "license": "MIT",
+  "author": "og-nav",
+  "homepage": "https://github.com/og-nav/expo-chessboard#readme",
   "repository": {
     "type": "git",
     "url": "https://github.com/og-nav/expo-chessboard.git"
   },
+  "bugs": {
+    "url": "https://github.com/og-nav/expo-chessboard/issues"
+  },
+  "sideEffects": false,
   "peerDependencies": {
     "chess.ts": ">=0.16.0",
     "expo-audio": "*",

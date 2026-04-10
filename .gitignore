@@ -20,3 +20,6 @@ example/ios/Pods/
 .vscode/
 .idea/
 *.swp
+
+# Local Python venv (used for one-off scripts like icon generation)
+.venv/

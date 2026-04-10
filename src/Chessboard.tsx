@@ -102,9 +102,32 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
     const chess = chessProp ?? internalChessRef.current!;
 
     // ── Shared values (readable on UI thread) ───────────────────────────
-    const pieceMap = useSharedValue<Record<string, PieceType>>({});
-    const legalMovesMap = useSharedValue<Record<string, string[]>>({});
-    const promotionsMap = useSharedValue<Record<string, boolean>>({});
+    // ALL of these are seeded from the current chess instance so the
+    // gesture layer is fully wired on first paint — without seeding,
+    // the post-mount syncFromChess() effect was the only thing that
+    // populated legalMovesMap, which left a window where a tap could
+    // pick up a piece (pieceMap was populated) but every drop failed
+    // the legality check (legalMovesMap was still {}) and snapped back.
+    // The Reset button "fixed" it only because remount re-ran the
+    // post-mount effect. Seeding kills the window.
+    //
+    // pieceMap is mirrored: a SharedValue (read by gesture-layer worklets
+    // on the UI thread) AND a React state (read by piece-layer during
+    // render). Reanimated v4 made `.value` reads during JS render unsafe
+    // — they can return stale snapshots — so the renderable mirror is
+    // necessary. Both are kept in sync inside syncFromChess.
+    const initialPieceMap = useMemo(() => buildPieceMap(chess), [chess]);
+    const initialLegal = useMemo(() => computeLegalMap(chess), [chess]);
+    const pieceMap = useSharedValue<Record<string, PieceType>>(initialPieceMap);
+    const [pieceMapState, setPieceMapState] = useState<
+      Record<string, PieceType>
+    >(initialPieceMap);
+    const legalMovesMap = useSharedValue<Record<string, string[]>>(
+      initialLegal.moves
+    );
+    const promotionsMap = useSharedValue<Record<string, boolean>>(
+      initialLegal.promotions
+    );
     // Premove maps mirror legal/promotions but are computed against a
     // hypothetical "swap turn" position so the user can drag their own
     // pieces during the opponent's think. Empty when premoves are off
@@ -114,7 +137,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
     const selectedSquare = useSharedValue<string | null>(null);
     const lastMoveFrom = useSharedValue<string | null>(null);
     const lastMoveTo = useSharedValue<string | null>(null);
-    const kingInCheck = useSharedValue<string | null>(null);
+    const kingInCheck = useSharedValue<string | null>(
+      chess.inCheck() ? findKingSquare(chess, chess.turn()) : null
+    );
 
     // Drag state
     const draggingSquare = useSharedValue<string | null>(null);
@@ -174,7 +199,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
 
     // ── Sync board state from Chess instance ────────────────────────────
     const syncFromChess = useCallback(() => {
-      pieceMap.value = buildPieceMap(chess);
+      const newPieceMap = buildPieceMap(chess);
+      pieceMap.value = newPieceMap;
+      setPieceMapState(newPieceMap);
       const legal = computeLegalMap(chess);
       legalMovesMap.value = legal.moves;
       promotionsMap.value = legal.promotions;
@@ -432,8 +459,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
         // reconciliation diff sees the new position and animates the
         // pieces backward (the M5 backward-promotion branch in
         // reconcile-pieces.ts is what makes promotion-undo not pop).
-        // Sounds and onMove intentionally do NOT fire — scrubbing is
-        // a navigation operation, not a new move.
+        // Both also play a "scrub" sound (move/capture, never
+        // gameOver) so the navigation feels physical. onMove
+        // intentionally does NOT fire — scrubbing is not a new move.
         undo: () => {
           if (chess.history().length === 0) return;
           const popped = chess.undo();
@@ -442,6 +470,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             setPremove(null);
             fenRef.current = chess.fen();
             syncFromChess();
+            sounds.playForScrub(popped as Move);
           }
         },
         redo: () => {
@@ -451,10 +480,13 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             // SAN is the most reliable form to replay because it
             // re-resolves the from/to disambiguation against the
             // current position. san is non-optional on Move.
-            chess.move(popped.san);
+            const replayed = chess.move(popped.san);
             setPremove(null);
             fenRef.current = chess.fen();
             syncFromChess();
+            if (replayed) {
+              sounds.playForScrub(replayed as Move);
+            }
           } catch (err) {
             // If the redo somehow fails (shouldn't happen, but
             // defensive), drop the entry rather than corrupting the
@@ -498,6 +530,13 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           syncFromChess();
         },
         getMoveIndex: () => chess.history().length,
+        // Total reachable moves: current cursor position plus everything
+        // sitting in the redo stack. After undo()-ing to ply 0,
+        // getMoveIndex() returns 0 but getMoveCount() still returns the
+        // full game length, so callers can goToMoveIndex(getMoveCount())
+        // to jump back to the end.
+        getMoveCount: () =>
+          chess.history().length + redoStackRef.current.length,
         getHistory: () => chess.history({ verbose: true }) as Move[],
         canUndo: () => chess.history().length > 0,
         canRedo: () => redoStackRef.current.length > 0,
@@ -572,7 +611,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           boardSize={boardSize}
           flipped={flipped}
           animationDuration={animationDuration}
-          pieceMap={pieceMap}
+          pieceMap={pieceMapState}
           syncVersion={syncVersion}
           scaledSquare={scaledSquare}
           draggingSquare={draggingSquare}
@@ -635,6 +674,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           flipped={flipped}
           gestureEnabled={gestureEnabled && !promotionPending}
           playerColor={gesturePlayerColor}
+          isPremoveMode={isPremoveMode}
           legalMovesMap={activeLegalMap}
           promotionsMap={activePromotionsMap}
           pieceMap={pieceMap}
