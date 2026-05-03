@@ -134,8 +134,25 @@ export function useBoardSounds(
     [playSound, playHaptic]
   );
 
+  // Sound for variation-preview stepping. Stepping isn't a real move, so
+  // game-over sounds are suppressed (same rationale as scrubbing). Capture
+  // is detected from the SAN string ('x'), since the caller doesn't have
+  // a Move object to consult — preview steps replay SAN against a
+  // throwaway Chess copy and the resulting Move is discarded.
+  const playForPreviewStep = useCallback(
+    (san: string) => {
+      if (san.includes("x")) {
+        playSound("capture");
+      } else {
+        playSound("move");
+      }
+      playHaptic();
+    },
+    [playSound, playHaptic]
+  );
+
   return useMemo(
-    () => ({ playForMove, playForScrub }),
-    [playForMove, playForScrub]
+    () => ({ playForMove, playForScrub, playForPreviewStep }),
+    [playForMove, playForScrub, playForPreviewStep]
   );
 }

@@ -298,6 +298,188 @@ describe("Chessboard ref API — reset clears redo stack", () => {
   });
 });
 
+describe("Chessboard ref API — variation preview", () => {
+  test("previewLine renders the end of the line by default", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    const liveBefore = ref.current!.getFen();
+
+    act(() => {
+      ref.current?.previewLine(["e4", "e5", "Nf3"]);
+    });
+
+    expect(ref.current?.isPreviewing()).toBe(true);
+    expect(ref.current?.getPreviewIndex()).toBe(3);
+    expect(ref.current?.getPreviewLength()).toBe(3);
+    // Live FEN is untouched — only the displayed FEN advanced.
+    expect(ref.current?.getFen()).toBe(liveBefore);
+    expect(ref.current?.getDisplayedFen()).not.toBe(liveBefore);
+    // After 1.e4 e5 2.Nf3 the knight sits on f3.
+    expect(ref.current?.getDisplayedFen()).toContain("/5N2/");
+  });
+
+  test("previewLine with explicit index lands at that step", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.previewLine(["e4", "e5", "Nf3"], 0);
+    });
+
+    expect(ref.current?.getPreviewIndex()).toBe(0);
+    // Index 0 = base position; displayed equals live.
+    expect(ref.current?.getDisplayedFen()).toBe(ref.current?.getFen());
+  });
+
+  test("step forward / back walks through the line", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.previewLine(["e4", "e5", "Nf3"], 0);
+    });
+
+    act(() => {
+      const ok = ref.current?.stepPreviewForward();
+      expect(ok).toBe(true);
+    });
+    expect(ref.current?.getPreviewIndex()).toBe(1);
+
+    act(() => {
+      ref.current?.stepPreviewForward();
+      ref.current?.stepPreviewForward();
+    });
+    expect(ref.current?.getPreviewIndex()).toBe(3);
+
+    // At the end — further forward steps return false.
+    act(() => {
+      const ok = ref.current?.stepPreviewForward();
+      expect(ok).toBe(false);
+    });
+    expect(ref.current?.getPreviewIndex()).toBe(3);
+
+    act(() => {
+      ref.current?.stepPreviewBack();
+    });
+    expect(ref.current?.getPreviewIndex()).toBe(2);
+  });
+
+  test("exitPreview returns to live without mutating Chess", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    const live = ref.current!.getFen();
+
+    act(() => {
+      ref.current?.previewLine(["e4", "e5"]);
+    });
+    expect(ref.current?.isPreviewing()).toBe(true);
+
+    act(() => {
+      ref.current?.exitPreview();
+    });
+
+    expect(ref.current?.isPreviewing()).toBe(false);
+    expect(ref.current?.getFen()).toBe(live);
+    expect(ref.current?.getDisplayedFen()).toBe(live);
+    expect(ref.current?.getPreviewIndex()).toBe(0);
+    expect(ref.current?.getPreviewLength()).toBe(0);
+  });
+
+  test("animateMove while previewing exits preview and applies the move to live", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.previewLine(["e4", "e5", "Nf3"]);
+    });
+    expect(ref.current?.isPreviewing()).toBe(true);
+
+    // Simulate "live move pushed from Lichess".
+    act(() => {
+      ref.current?.animateMove("e2", "e4");
+    });
+
+    expect(ref.current?.isPreviewing()).toBe(false);
+    expect(ref.current?.getMoveIndex()).toBe(1);
+    expect(ref.current?.getFen()).toBe(ref.current?.getDisplayedFen());
+  });
+
+  test("invalid SAN aborts preview entry without changing state", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    const live = ref.current!.getFen();
+
+    act(() => {
+      ref.current?.previewLine(["e4", "definitely-not-san"]);
+    });
+
+    expect(ref.current?.isPreviewing()).toBe(false);
+    expect(ref.current?.getFen()).toBe(live);
+    expect(ref.current?.getDisplayedFen()).toBe(live);
+  });
+
+  test("onPreviewChange fires on enter, step, and exit", () => {
+    const ref = createRef<ChessboardRef>();
+    const onPreviewChange = jest.fn();
+    render(
+      <Chessboard
+        ref={ref}
+        boardSize={320}
+        onPreviewChange={onPreviewChange}
+      />
+    );
+
+    act(() => {
+      ref.current?.previewLine(["e4", "e5"], 0);
+    });
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ active: true, index: 0, length: 2 })
+    );
+
+    act(() => {
+      ref.current?.stepPreviewForward();
+    });
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ active: true, index: 1, length: 2 })
+    );
+
+    act(() => {
+      ref.current?.exitPreview();
+    });
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+  });
+
+  test("calling previewLine again replaces the active line", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    act(() => {
+      ref.current?.previewLine(["e4", "e5"]);
+    });
+    const firstFen = ref.current?.getDisplayedFen();
+
+    act(() => {
+      ref.current?.previewLine(["d4", "d5", "c4"]);
+    });
+
+    expect(ref.current?.getPreviewLength()).toBe(3);
+    expect(ref.current?.getPreviewIndex()).toBe(3);
+    expect(ref.current?.getDisplayedFen()).not.toBe(firstFen);
+  });
+
+  test("step methods return false when not previewing", () => {
+    const ref = createRef<ChessboardRef>();
+    render(<Chessboard ref={ref} boardSize={320} />);
+
+    expect(ref.current?.stepPreviewForward()).toBe(false);
+    expect(ref.current?.stepPreviewBack()).toBe(false);
+    expect(ref.current?.isPreviewing()).toBe(false);
+  });
+});
+
 describe("Chessboard sound mock", () => {
   // Fake timers are scoped to this describe — animateMove defers the
   // sound trigger via setTimeout(animationDuration), so we need to

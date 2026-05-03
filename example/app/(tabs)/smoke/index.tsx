@@ -307,6 +307,152 @@ function OnSquarePressSlot({ size, onReset }: { size: number; onReset: () => voi
 }
 
 /**
+ * Card 47 — variation preview. Mounts at the starting position and
+ * lets the user preview a 6-ply Ruy Lopez line on top of the live
+ * position without committing to it. Tint overlay + Step buttons
+ * exercise the full preview API surface; "Live move" demonstrates
+ * auto-exit when a real live move arrives.
+ */
+// Six plies of the Ruy Lopez. Starting from the initial position so the
+// SAN is unambiguous and trivially replayable; nothing about the preview
+// API depends on the base position being mid-game.
+const PREVIEW_LINE: string[] = ["e4", "e5", "Nf3", "Nc6", "Bb5", "a6"];
+const PREVIEW_BASE_FEN = STARTING_FEN;
+
+function VariationPreviewSlot({
+  size,
+  onReset,
+}: {
+  size: number;
+  onReset: () => void;
+}) {
+  const [chess] = useState(() => new Chess(PREVIEW_BASE_FEN));
+  const ref = useRef<ChessboardRef>(null);
+  const [previewState, setPreviewState] = useState<{
+    index: number;
+    length: number;
+  } | null>(null);
+
+  // Mirror the engine's first move as a PV arrow while previewing —
+  // shows the consumer-facing pattern (just hand the existing `arrows`
+  // prop a one-element array of {from, to} computed from your line).
+  const pvArrow =
+    previewState && previewState.index < previewState.length
+      ? {
+          // Walk the SAN through a temp Chess to get from/to. Cheap
+          // because we only do it on render and the line is short.
+          ...(() => {
+            const c = new Chess(chess.fen());
+            try {
+              const m = c.move(PREVIEW_LINE[previewState.index]);
+              return m
+                ? { from: m.from as Square, to: m.to as Square }
+                : { from: "e2" as Square, to: "e2" as Square };
+            } catch {
+              return { from: "e2" as Square, to: "e2" as Square };
+            }
+          })(),
+          color: "rgba(80, 130, 230, 0.85)",
+        }
+      : null;
+
+  return (
+    <>
+      <View style={styles.boardWrap}>
+        <Chessboard
+          ref={ref}
+          chess={chess}
+          boardSize={size}
+          arrows={pvArrow ? [pvArrow] : undefined}
+          onPreviewChange={(s) =>
+            setPreviewState(s ? { index: s.index, length: s.length } : null)
+          }
+        />
+      </View>
+      <Text style={styles.squarePressLabel}>
+        {previewState
+          ? `Preview ${previewState.index}/${previewState.length}`
+          : "Live"}
+      </Text>
+      <View style={styles.controls}>
+        {!previewState && (
+          <Pressable
+            onPress={() => ref.current?.previewLine(PREVIEW_LINE, 0)}
+            style={({ pressed }) => [
+              styles.controlButton,
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Text style={styles.controlButtonText}>Show PV</Text>
+          </Pressable>
+        )}
+        {previewState && (
+          <>
+            <Pressable
+              onPress={() => ref.current?.stepPreviewBack()}
+              style={({ pressed }) => [
+                styles.controlButton,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <Text style={styles.controlButtonText}>◀ Back</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => ref.current?.stepPreviewForward()}
+              style={({ pressed }) => [
+                styles.controlButton,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <Text style={styles.controlButtonText}>Forward ▶</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => ref.current?.exitPreview()}
+              style={({ pressed }) => [
+                styles.controlButton,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <Text style={styles.controlButtonText}>Exit preview</Text>
+            </Pressable>
+          </>
+        )}
+        <Pressable
+          // Simulate a "live move arrived" — auto-exits preview and
+          // applies the move to the live game.
+          onPress={() => {
+            const move = pickRandomMove(chess);
+            if (move) {
+              ref.current?.animateMove(move.from, move.to, move.promotion);
+            }
+          }}
+          style={({ pressed }) => [
+            styles.controlButton,
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Text style={styles.controlButtonText}>Live move</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            chess.load(PREVIEW_BASE_FEN);
+            ref.current?.reset();
+            onReset();
+          }}
+          style={({ pressed }) => [
+            styles.controlButton,
+            styles.resetButton,
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Text style={styles.controlButtonText}>Reset</Text>
+        </Pressable>
+      </View>
+    </>
+  );
+}
+
+/**
  * Card 46 — undo through a promotion move (visual). Promotes a pawn
  * via animateMove, then lets the user undo/redo to see the queen morph
  * back into a pawn and forward again.
@@ -933,6 +1079,13 @@ const SMOKE_CARDS: SmokeCardProps[] = [
     expected:
       "Tap 'Promote' — the e7 pawn slides to e8 and morphs into a queen. Then tap 'Undo' — the queen slides back to e7 and morphs BACK into a pawn (no pop). 'Redo' reverses it again. Tests reconciliation branch 3b visually.",
     BoardSlot: UndoPromotionSlot,
+  },
+  {
+    number: 47,
+    title: "Variation preview",
+    expected:
+      "Tap 'Show PV' — a 6-ply Ruy Lopez line is loaded and a blue arrow shows the recommended next move. The board renders that line WITHOUT touching the live game, with a light tint over everything as a visual cue. Forward/Back step through the line one move at a time; the arrow advances to the next move; sounds play on each step. Gestures are disabled while the tint is up. Tap 'Live move' to simulate a real Lichess push — preview auto-exits and a random move applies to the live game. Tap 'Exit preview' to dismiss without making a live move. The label below the board shows 'Live' or 'Preview N/length'.",
+    BoardSlot: VariationPreviewSlot,
   },
 ];
 

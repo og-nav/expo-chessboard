@@ -142,6 +142,37 @@ export interface ChessboardProps {
    * use). Useful for puzzle editors and click-to-arrow workflows.
    */
   onSquarePress?: (square: Square) => void;
+  /**
+   * Tint color painted over the entire board while a variation preview
+   * is active. Visual cue that "what you're seeing isn't the live game."
+   * Defaults to `rgba(255, 255, 255, 0.18)`.
+   */
+  previewTintColor?: string;
+  /**
+   * Whether the tint overlay is rendered when a preview is active.
+   * Default true. Pass false if you want to drive the visual state
+   * yourself via `onPreviewChange`.
+   */
+  showPreviewTint?: boolean;
+  /**
+   * Fires whenever the variation preview state changes. Called with
+   * `null` when preview is exited (board returns to live), and with
+   * a populated state object when entering or stepping through a line.
+   */
+  onPreviewChange?: (
+    state:
+      | {
+          /** Always true while populated. */
+          active: true;
+          /** 0 = base position; line.length = end of the line. */
+          index: number;
+          /** Number of half-moves in the previewed line. */
+          length: number;
+          /** FEN of the position currently rendered. */
+          fen: string;
+        }
+      | null
+  ) => void;
 }
 
 export interface ChessboardRef {
@@ -192,6 +223,46 @@ export interface ChessboardRef {
   getHistory: () => Move[];
   canUndo: () => boolean;
   canRedo: () => boolean;
+  /**
+   * Begin a variation preview from the live position. The board renders
+   * the position reached by applying `moves` (SAN strings) on top of the
+   * current live FEN, without committing those moves to the underlying
+   * Chess instance. While preview is active, gestures are disabled and
+   * the tint overlay is shown.
+   *
+   * `index` controls where to start: defaults to `moves.length` (jump
+   * to the end of the line). Pass `0` to land at the live base position
+   * and step forward via `stepPreviewForward()`.
+   *
+   * Calling this while another preview is active replaces it. Any live
+   * mutation (a new `fen` prop, `chess.move()` followed by a sync, or
+   * `animateMove()` / `undo()` / `redo()` / `reset()` via this ref)
+   * automatically exits preview mode.
+   */
+  previewLine: (moves: string[], index?: number) => void;
+  /**
+   * Advance one half-move through the previewed line. Returns true on
+   * success, false at the end of the line (or when not previewing).
+   */
+  stepPreviewForward: () => boolean;
+  /**
+   * Step backward one half-move through the previewed line. Returns
+   * true on success, false at index 0 (or when not previewing).
+   */
+  stepPreviewBack: () => boolean;
+  /** Exit preview and snap back to the live position. */
+  exitPreview: () => void;
+  isPreviewing: () => boolean;
+  /** Current step within the previewed line (0..length). 0 when not previewing. */
+  getPreviewIndex: () => number;
+  /** Length of the previewed line. 0 when not previewing. */
+  getPreviewLength: () => number;
+  /**
+   * FEN of the position currently rendered. Equals `getFen()` when not
+   * previewing; equals the previewed position otherwise. `getFen()` always
+   * returns the live FEN.
+   */
+  getDisplayedFen: () => string;
 }
 
 export type { Move, PieceSymbol, Chess };

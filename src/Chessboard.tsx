@@ -34,6 +34,9 @@ import GestureLayer from "./components/gesture-layer";
 import PromotionDialog from "./components/promotion-dialog";
 import ArrowsLayer from "./components/arrows-layer";
 import ExternalHighlights from "./components/external-highlights";
+import PreviewTint from "./components/preview-tint";
+
+const DEFAULT_PREVIEW_TINT = "rgba(255, 255, 255, 0.18)";
 
 /**
  * Build a hypothetical "opponent already moved, my turn" FEN by flipping
@@ -73,6 +76,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       premovesEnabled = false,
       onMove,
       onSquarePress,
+      previewTintColor = DEFAULT_PREVIEW_TINT,
+      showPreviewTint = true,
+      onPreviewChange,
     },
     ref
   ) {
@@ -179,6 +185,18 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
     // v0.2 will turn this branching event into a tree node instead.
     const redoStackRef = useRef<Move[]>([]);
 
+    // ── Variation preview state ─────────────────────────────────────────
+    // While previewing, the board renders a hypothetical position
+    // computed from `previewBaseFen` + `previewLine.slice(0, previewIndex)`
+    // — the live Chess instance is NOT mutated. Any code path that
+    // commits to live (animateMove, undo, redo, reset, fen-prop change)
+    // must call exitPreviewIfActive() before syncFromChess() so the
+    // tint and gesture-disable come down cleanly.
+    const previewLineRef = useRef<string[] | null>(null);
+    const previewIndexRef = useRef(0);
+    const previewBaseFenRef = useRef("");
+    const [previewActive, setPreviewActive] = useState(false);
+
     // ── Sounds ──────────────────────────────────────────────────────────
     const sounds = useBoardSounds(soundEnabled, hapticsEnabled);
 
@@ -268,6 +286,121 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       lastMoveTo,
     ]);
 
+    // ── Preview helpers ─────────────────────────────────────────────────
+    // Build a transient Chess instance at the current preview step.
+    // Returns null if the line is invalid SAN at any step before the
+    // requested index — caller is expected to exit preview in that case.
+    const buildPreviewChess = useCallback(
+      (line: string[], baseFen: string, index: number): Chess | null => {
+        try {
+          const c = new Chess(baseFen);
+          for (let i = 0; i < index; i++) {
+            const result = c.move(line[i]);
+            if (!result) return null;
+          }
+          return c;
+        } catch (err) {
+          if (__DEV__) {
+            console.warn("[expo-chessboard] preview replay failed:", err);
+          }
+          return null;
+        }
+      },
+      []
+    );
+
+    const fireOnPreviewChange = useCallback(
+      (state: Parameters<NonNullable<typeof onPreviewChange>>[0]) => {
+        if (onPreviewChange) onPreviewChange(state);
+      },
+      [onPreviewChange]
+    );
+
+    // Render the current preview position. Mirrors syncFromChess but
+    // reads from a transient Chess copy instead of the live one. Premove
+    // maps are zeroed because preview is read-only by design (v0.1).
+    const syncFromPreview = useCallback(() => {
+      const line = previewLineRef.current;
+      if (!line) return;
+      const previewChess = buildPreviewChess(
+        line,
+        previewBaseFenRef.current,
+        previewIndexRef.current
+      );
+      if (!previewChess) {
+        // Bad SAN somewhere in the line — fall back to live so we don't
+        // render a half-applied position.
+        previewLineRef.current = null;
+        previewIndexRef.current = 0;
+        setPreviewActive(false);
+        fireOnPreviewChange(null);
+        syncFromChess();
+        return;
+      }
+
+      const newPieceMap = buildPieceMap(previewChess);
+      pieceMap.value = newPieceMap;
+      setPieceMapState(newPieceMap);
+      const legal = computeLegalMap(previewChess);
+      legalMovesMap.value = legal.moves;
+      promotionsMap.value = legal.promotions;
+      kingInCheck.value = previewChess.inCheck()
+        ? findKingSquare(previewChess, previewChess.turn())
+        : null;
+      // Preview is read-only — premove rings are nonsensical here.
+      premoveLegalMovesMap.value = {};
+      premovePromotionsMap.value = {};
+
+      // Last-move highlight: most recent move within the preview line.
+      // At index 0 we're at the live base position but rendering as a
+      // preview; show no highlight to avoid confusion with the real
+      // last-move marker that returns when preview is exited.
+      if (previewIndexRef.current > 0) {
+        const history = previewChess.history({ verbose: true }) as Move[];
+        if (history.length > 0) {
+          const last = history[history.length - 1];
+          lastMoveFrom.value = last.from;
+          lastMoveTo.value = last.to;
+        }
+      } else {
+        lastMoveFrom.value = null;
+        lastMoveTo.value = null;
+      }
+
+      setSyncVersion((v) => v + 1);
+
+      fireOnPreviewChange({
+        active: true,
+        index: previewIndexRef.current,
+        length: line.length,
+        fen: previewChess.fen(),
+      });
+    }, [
+      buildPreviewChess,
+      syncFromChess,
+      fireOnPreviewChange,
+      pieceMap,
+      legalMovesMap,
+      promotionsMap,
+      premoveLegalMovesMap,
+      premovePromotionsMap,
+      kingInCheck,
+      lastMoveFrom,
+      lastMoveTo,
+    ]);
+
+    // Drop preview state without re-syncing. Caller is expected to
+    // follow up with syncFromChess() so the live position is rendered.
+    const exitPreviewIfActive = useCallback(() => {
+      if (!previewLineRef.current) return false;
+      previewLineRef.current = null;
+      previewIndexRef.current = 0;
+      previewBaseFenRef.current = "";
+      setPreviewActive(false);
+      fireOnPreviewChange(null);
+      return true;
+    }, [fireOnPreviewChange]);
+
     // ── Bug #1 fix: useEffect must declare its dependencies. The v2
     // version had no dep array, so it ran every render and only avoided
     // an infinite loop because of the FEN-equality guard. Adding [chess]
@@ -279,21 +412,30 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
       const currentFen = chess.fen();
       if (currentFen !== fenRef.current) {
         fenRef.current = currentFen;
+        // Live position changed (consumer mutated their controlled
+        // Chess instance and we noticed via the fen-equality probe).
+        // The preview's base FEN is now stale, so drop preview and
+        // render the new live state.
+        exitPreviewIfActive();
         syncFromChess();
       }
-    }, [chess, syncFromChess]);
+    }, [chess, syncFromChess, exitPreviewIfActive]);
 
     // ── Uncontrolled mode: react to `fen` prop changes by loading the
     // new position into the internal Chess instance. Skipped in
     // controlled mode (consumer is responsible for their own resets).
+    // This is also the "Lichess pushed a new live move" path — any
+    // active preview is dropped because its base position no longer
+    // matches the live game.
     useEffect(() => {
       if (chessProp) return;
       if (!fen) return;
       if (chess.fen() === fen) return;
       chess.load(fen);
       fenRef.current = chess.fen();
+      exitPreviewIfActive();
       syncFromChess();
-    }, [chessProp, fen, chess, syncFromChess]);
+    }, [chessProp, fen, chess, syncFromChess, exitPreviewIfActive]);
 
     // ── Move handling ───────────────────────────────────────────────────
     const executeMove = useCallback(
@@ -309,6 +451,8 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             // fresh move makes the queued redo entries unreachable.
             redoStackRef.current = [];
             fenRef.current = chess.fen();
+            // Live state changed — preview's base FEN is now stale.
+            exitPreviewIfActive();
             syncFromChess();
             sounds.playForMove(move, chess);
             onMove?.(move);
@@ -323,7 +467,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           }
         }
       },
-      [chess, syncFromChess, sounds, onMove]
+      [chess, syncFromChess, exitPreviewIfActive, sounds, onMove]
     );
 
     const handleMoveRequest = useCallback(
@@ -417,6 +561,10 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
               // moves also invalidate any pending redo entries.
               redoStackRef.current = [];
               fenRef.current = chess.fen();
+              // A live move arriving while previewing (e.g. Lichess
+              // push) means "snap back to the real game" — drop the
+              // preview before rendering the new live position.
+              exitPreviewIfActive();
               syncFromChess();
               onMove?.(move);
               // Play sound + haptics after animation finishes
@@ -433,6 +581,8 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
         },
         syncFromChess: () => {
           fenRef.current = chess.fen();
+          // Explicit sync request always renders live, never preview.
+          exitPreviewIfActive();
           syncFromChess();
         },
         reset: (nextFen?: string) => {
@@ -445,10 +595,12 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           }
           // Reset cancels any queued premove — the board the user
           // queued against doesn't exist anymore. The redo stack also
-          // belongs to a position that no longer exists.
+          // belongs to a position that no longer exists. Same for any
+          // active preview.
           setPremove(null);
           redoStackRef.current = [];
           fenRef.current = chess.fen();
+          exitPreviewIfActive();
           syncFromChess();
         },
         getFen: () => chess.fen(),
@@ -469,6 +621,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             redoStackRef.current.push(popped as Move);
             setPremove(null);
             fenRef.current = chess.fen();
+            exitPreviewIfActive();
             syncFromChess();
             sounds.playForScrub(popped as Move);
           }
@@ -483,6 +636,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             const replayed = chess.move(popped.san);
             setPremove(null);
             fenRef.current = chess.fen();
+            exitPreviewIfActive();
             syncFromChess();
             if (replayed) {
               sounds.playForScrub(replayed as Move);
@@ -527,6 +681,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
           }
           setPremove(null);
           fenRef.current = chess.fen();
+          exitPreviewIfActive();
           syncFromChess();
         },
         getMoveIndex: () => chess.history().length,
@@ -540,11 +695,105 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
         getHistory: () => chess.history({ verbose: true }) as Move[],
         canUndo: () => chess.history().length > 0,
         canRedo: () => redoStackRef.current.length > 0,
+        // ── Variation preview ──────────────────────────────────────
+        // previewLine snapshots the live FEN as the base, stores the
+        // SAN sequence, and renders the position at `index` (default
+        // = end of line). The live Chess instance is left untouched;
+        // the displayed pieces, legal map, check highlight, and
+        // last-move marker all come from a transient Chess copy
+        // recomputed on every step. Calling previewLine while a
+        // preview is already active replaces it.
+        previewLine: (moves: string[], index?: number) => {
+          if (!moves || moves.length === 0) {
+            // Empty line is a degenerate preview — equivalent to
+            // showing the live position with the tint on. Allow it
+            // (useful for "preview mode without an engine line yet")
+            // but cap the index at 0.
+            previewLineRef.current = [];
+            previewIndexRef.current = 0;
+            previewBaseFenRef.current = chess.fen();
+            setPremove(null);
+            setPreviewActive(true);
+            syncFromPreview();
+            return;
+          }
+          const target = Math.max(
+            0,
+            Math.min(index ?? moves.length, moves.length)
+          );
+          // Validate the line is replayable on the way in. If not,
+          // bail rather than entering a broken preview.
+          const probe = buildPreviewChess(moves, chess.fen(), target);
+          if (!probe) {
+            if (__DEV__) {
+              console.warn(
+                "[expo-chessboard] previewLine: SAN replay failed"
+              );
+            }
+            return;
+          }
+          previewLineRef.current = moves.slice();
+          previewBaseFenRef.current = chess.fen();
+          previewIndexRef.current = target;
+          // Active preview cancels any queued premove — they belong
+          // to the live position which is no longer rendered.
+          setPremove(null);
+          setPreviewActive(true);
+          syncFromPreview();
+        },
+        stepPreviewForward: () => {
+          const line = previewLineRef.current;
+          if (!line) return false;
+          if (previewIndexRef.current >= line.length) return false;
+          const san = line[previewIndexRef.current];
+          previewIndexRef.current += 1;
+          syncFromPreview();
+          // syncFromPreview may have aborted preview if the line was
+          // invalid; check before playing the step sound.
+          if (previewLineRef.current) {
+            sounds.playForPreviewStep(san);
+          }
+          return true;
+        },
+        stepPreviewBack: () => {
+          const line = previewLineRef.current;
+          if (!line) return false;
+          if (previewIndexRef.current <= 0) return false;
+          previewIndexRef.current -= 1;
+          // The "undone" SAN is the one we just stepped over.
+          const san = line[previewIndexRef.current];
+          syncFromPreview();
+          if (previewLineRef.current) {
+            sounds.playForPreviewStep(san);
+          }
+          return true;
+        },
+        exitPreview: () => {
+          if (!exitPreviewIfActive()) return;
+          syncFromChess();
+        },
+        isPreviewing: () => previewLineRef.current !== null,
+        getPreviewIndex: () =>
+          previewLineRef.current ? previewIndexRef.current : 0,
+        getPreviewLength: () =>
+          previewLineRef.current ? previewLineRef.current.length : 0,
+        getDisplayedFen: () => {
+          if (!previewLineRef.current) return chess.fen();
+          const previewChess = buildPreviewChess(
+            previewLineRef.current,
+            previewBaseFenRef.current,
+            previewIndexRef.current
+          );
+          return previewChess ? previewChess.fen() : chess.fen();
+        },
       }),
       [
         chess,
         chessProp,
         syncFromChess,
+        syncFromPreview,
+        exitPreviewIfActive,
+        buildPreviewChess,
         sounds,
         onMove,
         animationDuration,
@@ -661,6 +910,9 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
             />
           </>
         )}
+        {previewActive && showPreviewTint && (
+          <PreviewTint boardSize={boardSize} color={previewTintColor} />
+        )}
         <LegalMoveDots
           boardSize={boardSize}
           flipped={flipped}
@@ -672,7 +924,7 @@ const Chessboard = React.forwardRef<ChessboardRef, ChessboardProps>(
         <GestureLayer
           boardSize={boardSize}
           flipped={flipped}
-          gestureEnabled={gestureEnabled && !promotionPending}
+          gestureEnabled={gestureEnabled && !promotionPending && !previewActive}
           playerColor={gesturePlayerColor}
           isPremoveMode={isPremoveMode}
           legalMovesMap={activeLegalMap}
